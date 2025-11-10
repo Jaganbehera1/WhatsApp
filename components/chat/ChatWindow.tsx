@@ -29,8 +29,8 @@ export default function ChatWindow({ chatId, currentUser, onBack }: ChatWindowPr
     fetchMessages()
     fetchChatInfo()
 
-    // Subscribe to new messages
     console.log('Setting up real-time subscription for chat:', chatId)
+
     const messageSubscription = supabase
       .channel(`chat:${chatId}`, {
         config: {
@@ -47,59 +47,51 @@ export default function ChatWindow({ chatId, currentUser, onBack }: ChatWindowPr
         },
         async (payload) => {
           console.log('Real-time message received:', payload)
-          // Check if message already exists (to avoid duplicates from immediate local state update)
-          setMessages((prev) => {
-            const messageExists = prev.some((msg) => msg.id === payload.new.id)
-            if (messageExists) {
-              return prev // Message already in state, don't add again
-            }
-            
-            // Message doesn't exist, fetch it asynchronously
-            // Note: We can't use await here, so we use .then()
-            supabase
+
+          try {
+            // Fetch new message from Supabase
+            const { data: newMsg, error: fetchError } = await supabase
               .from('messages')
               .select('*, sender:profiles!sender_id(*)')
               .eq('id', payload.new.id)
               .single()
-              .then(({ data: newMsg, error: fetchError }) => {
-                if (fetchError) {
-                  console.error('Error fetching new message:', fetchError)
-                  // If fetch fails, try to construct message from payload
-                  if (payload.new) {
-                    const messageFromPayload: Message = {
-                      id: payload.new.id,
-                      chat_id: payload.new.chat_id,
-                      sender_id: payload.new.sender_id,
-                      content: payload.new.content,
-                      message_type: payload.new.message_type || 'text',
-                      created_at: payload.new.created_at,
-                      updated_at: payload.new.updated_at,
-                      read_at: payload.new.read_at || null,
-                    }
-                    setMessages((current) => {
-                      const exists = current.some((msg) => msg.id === messageFromPayload.id)
-                      if (exists) return current
-                      return [...current, messageFromPayload]
-                    })
-                  }
-                  return
+
+            if (fetchError || !newMsg) {
+              console.error('Error fetching new message:', fetchError)
+
+              // Fallback: construct message manually from payload
+              if (payload.new) {
+                const messageFromPayload: Message = {
+                  id: payload.new.id,
+                  chat_id: payload.new.chat_id,
+                  sender_id: payload.new.sender_id,
+                  content: payload.new.content,
+                  message_type: payload.new.message_type || 'text',
+                  created_at: payload.new.created_at,
+                  updated_at: payload.new.updated_at,
+                  read_at: payload.new.read_at || null,
                 }
-                
-                if (newMsg) {
-                  setMessages((current) => {
-                    // Double-check it's not already there (race condition protection)
-                    const exists = current.some((msg) => msg.id === newMsg.id)
-                    if (exists) return current
-                    return [...current, newMsg as Message]
-                  })
-                }
-              })
-              .catch((err) => {
-                console.error('Error fetching new message:', err)
-              })
-            
-            return prev // Return immediately, will update when fetch completes
-          })
+
+                setMessages((current: Message[]) => {
+                  const exists = current.some(
+                    (msg: Message) => msg.id === messageFromPayload.id
+                  )
+                  if (exists) return current
+                  return [...current, messageFromPayload]
+                })
+              }
+              return
+            }
+
+            // Add message to state safely
+            setMessages((current: Message[]) => {
+              const exists = current.some((msg: Message) => msg.id === newMsg.id)
+              if (exists) return current
+              return [...current, newMsg as Message]
+            })
+          } catch (err) {
+            console.error('Error fetching new message:', err)
+          }
         }
       )
       .subscribe()
